@@ -1,0 +1,106 @@
+{
+  "abi": [
+    {
+      "inputs": [],
+      "name": "AlreadyAnchored",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroHash",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "hash",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "reporter",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint8",
+          "name": "kind",
+          "type": "uint8"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "timestamp",
+          "type": "uint64"
+        }
+      ],
+      "name": "HashAnchored",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "policyHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "registerPolicy",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "reportHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "registerReport",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "hash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "verify",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "exists",
+          "type": "bool"
+        },
+        {
+          "internalType": "address",
+          "name": "reporter",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "timestamp",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint8",
+          "name": "kind",
+          "type": "uint8"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x6080604052348015600e575f5ffd5b506102838061001c5f395ff3fe608060405234801561000f575f5ffd5b506004361061003f575f3560e01c80634404f1161461004357806375e3661614610058578063dd1df92c146100f9575b5f5ffd5b610056610051366004610236565b61010c565b005b6100bb610066366004610236565b5f9081526020818152604091829020825160608101845290546001600160a01b038116808352600160a01b820467ffffffffffffffff16938301849052600160e01b90910460ff169190930181905281151593565b6040805194151585526001600160a01b0393909316602085015267ffffffffffffffff919091168383015260ff166060830152519081900360800190f35b610056610107366004610236565b61011a565b610117816002610121565b50565b6101178160015b8161013f5760405163f1ae58d560e01b815260040160405180910390fd5b5f82815260208190526040902054600160a01b900467ffffffffffffffff161561017c5760405163a0094ce360e01b815260040160405180910390fd5b604080516060810182523380825267ffffffffffffffff42818116602080860182815260ff898116888a018181525f8d81528086528b902099518a5494519151909316600160e01b0260ff60e01b1991909816600160a01b026001600160e01b03199094166001600160a01b0390931692909217929092171694909417909555945194855293909286917fe1c5d185f2896910aa4088e26f9d401b247bf03220f944f220a340937e5fccee910160405180910390a4505050565b5f60208284031215610246575f5ffd5b503591905056fea2646970667358221220331ff28c553b2d0fd6f1ab8ef777636d609ce8bf018d6516533fdc3b2afd5bbe64736f6c63430008260033"
+}

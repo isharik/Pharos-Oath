@@ -1,0 +1,26 @@
+{
+  "name": "pharos-oath",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "compile:registry": "node scripts/compile-registry.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@x402/core": "^2.6.0",
+    "@x402/evm": "^2.6.0",
+    "@x402/express": "^2.6.0",
+    "express": "^4.21.2",
+    "viem": "^2.38.5"
+  },
+  "devDependencies": {
+    "solc": "^0.8.30"
+  },
+  "overrides": {
+    "tmp": "^0.2.7"
+  }
+}

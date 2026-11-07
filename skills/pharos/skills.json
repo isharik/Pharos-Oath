@@ -1,0 +1,19 @@
+{
+  "name": "Pharos Skill Engine OATH adapter",
+  "upstream": "https://github.com/PharosNetwork/pharos-skill-engine",
+  "upstreamSkill": "https://raw.githubusercontent.com/PharosNetwork/pharos-skill-engine/main/SKILL.md",
+  "integrationType": "Agent Skill workflow adapter; the upstream package provides SKILL.md and references, not a hosted runtime API",
+  "execution": "OATH selects these workflows from natural-language intent and runs them through chain-ID-verified Pharos JSON-RPC or the hosted Pharos Chain MCP.",
+  "security": "Read-only workflow tools. OATH does not accept, store, or pass private keys. Transaction signing and broadcasting stay in the connected wallet.",
+  "workflows": [
+    { "id": "network-health", "intent": "Check Pharos network identity, latest block, and gas information", "officialReference": "SKILL.md#network-configuration", "oathTool": "network_status" },
+    { "id": "wallet-investigation", "intent": "Read a wallet's native balance, code status, nonce, and block", "officialReference": "references/query.md#address-portfolio-wallet-asset-overview", "oathTool": "investigate_address" },
+    { "id": "contract-inspection", "intent": "Inspect deployed bytecode and a SHA-256 fingerprint", "officialReference": "references/query.md#contract-read-only-call", "oathTool": "inspect_contract" },
+    { "id": "transaction-analysis", "intent": "Read transaction details and receipt status", "officialReference": "references/query.md#transaction-status-determination-logic", "oathTool": "inspect_transaction" },
+    { "id": "failed-transaction-diagnosis", "intent": "Check a failed transaction's receipt and report limits where traces are unavailable", "officialReference": "references/query.md#transaction-status-determination-logic", "oathTool": "inspect_transaction" },
+    { "id": "approval-risk-assessment", "intent": "Read the allowance for a specified token, owner, and spender", "officialReference": "references/query.md#contract-read-only-call", "oathTool": "inspect_erc20_allowance" },
+    { "id": "transaction-preparation", "intent": "Estimate gas and fee for a supplied transaction; never submit it", "officialReference": "references/transaction.md#gas-estimation", "oathTool": "estimate_transaction" },
+    { "id": "post-execution-verification", "intent": "Read a wallet-submitted transaction and receipt", "officialReference": "references/query.md#transaction-status-determination-logic", "oathTool": "inspect_transaction" },
+    { "id": "developer-docs-lookup", "intent": "Find and retrieve relevant live Pharos developer documentation", "officialReference": "https://docs.pharos.xyz/llms.txt", "oathTool": "search_pharos_docs" }
+  ]
+}
