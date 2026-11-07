@@ -37,12 +37,16 @@ for (const [route, handler] of Object.entries({ chain, config, docs, integration
   });
 }
 
-app.use(express.static(root, { extensions: ["html"], fallthrough: true }));
+app.use(express.static(path.join(root, "public"), { extensions: ["html"], fallthrough: true }));
 app.use((req, res) => res.status(404).send("Not found"));
 app.use((error, req, res, _next) => {
   console.error(`${req.method} ${req.path}:`, error.message);
   if (!res.headersSent) res.status(500).json({ error: "Local OATH server error." });
 });
 
-const port = Number(process.env.PORT || 3000);
-app.listen(port, "127.0.0.1", () => console.log(`Pharos OATH local preview: http://localhost:${port}`));
+export default app;
+
+if (!process.env.VERCEL) {
+  const port = Number(process.env.PORT || 3000);
+  app.listen(port, "127.0.0.1", () => console.log(`Pharos OATH local preview: http://localhost:${port}`));
+}

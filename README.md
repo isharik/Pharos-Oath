@@ -96,7 +96,7 @@ The localhost preview has verified live RPC on both networks, Pacific Chain MCP,
 
 | Requirement | Status | Evidence or remaining dependency |
 |---|---|---|
-| Responsive app, logo, network toggle | Complete | `index.html`, `src/app.js`, `src/styles.css` |
+| Responsive app, logo, network toggle | Complete | `public/index.html`, `public/src/app.js`, `public/src/styles.css` |
 | Live RPC on Atlantic and Pacific | Complete | `/api/chain` validates chain ID on each request; checked locally against 688689 and 1672 |
 | Pharos Chain MCP | Partial | Hosted endpoint is verified as chain 1672. `PHAROS_ATLANTIC_MCP_URL` accepts an Atlantic MCP server; no Atlantic endpoint is published in the official network settings. |
 | OATH Core agent | Partial | NVIDIA Nemotron and Gemini function-calling paths plus deterministic read-only fallback are implemented. Supply `NVIDIA_API_KEY` (recommended) or `GEMINI_API_KEY` in Vercel to enable model orchestration. |
