@@ -1,8 +1,8 @@
 (() => {
   'use strict';
   const NETWORKS = {
-    atlantic: {name:'Pharos Atlantic Testnet',chainId:688689,chainIdHex:'0xa8231',nativeSymbol:'PHRS',rpcUrl:'https://atlantic.dplabs-internal.com',explorer:'https://atlantic.pharosscan.xyz'},
-    pacific: {name:'Pharos Pacific Mainnet',chainId:1672,chainIdHex:'0x688',nativeSymbol:'PROS',rpcUrl:'https://rpc.pharos.xyz',explorer:'https://www.pharosscan.xyz'}
+    atlantic: {name:'Pharos Atlantic Testnet',chainId:688689,chainIdHex:'0xa8231',caip2:'eip155:688689',nativeSymbol:'PHRS',rpcUrl:'https://atlantic.dplabs-internal.com',explorer:'https://atlantic.pharosscan.xyz'},
+    pacific: {name:'Pharos Pacific Mainnet',chainId:1672,chainIdHex:'0x688',caip2:'eip155:1672',nativeSymbol:'PROS',rpcUrl:'https://rpc.pharos.xyz',explorer:'https://www.pharosscan.xyz'}
   };
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -79,13 +79,158 @@
   $('#start-watch').addEventListener('click',()=>{const addr=$('#watch-address').value.trim()||wallet;if(!validAddress(addr)){showToast('Connect a wallet or enter a valid EVM address.');return}$('#watch-address').value=addr;localStorage.setItem('oath.watch.config',JSON.stringify({address:addr,balance:$('#watch-balance-check').checked,nonce:$('#watch-nonce-check').checked}));updateWatchUI(true);watchTick();watchTimer=setInterval(watchTick,20000)});$('#stop-watch').addEventListener('click',stopWatch);
   const watchConfig=read('oath.watch.config',null);if(watchConfig){$('#watch-address').value=watchConfig.address;$('#watch-balance-check').checked=watchConfig.balance;$('#watch-nonce-check').checked=watchConfig.nonce}
   let pendingPayment = null, lastReportHash = '';
-  async function checkMarketStatus(){try{const r=await fetch(`/api/market?network=${activeNetwork}`);const data=await r.json();$('#market-network').textContent=data.network||currentNetwork().name;$('#market-facilitator').textContent=data.facilitator||'Not configured';$('#market-asset').textContent=data.asset||'Not configured';$('#market-recipient').textContent=data.recipient||'Not configured';const ok=data.status==='ready';$('#request-market').disabled=!ok;$('#market-status-chip').className=`tiny-chip ${ok?'':'warn'}`;$('#market-status-chip').innerHTML=`<i></i> ${ok?'READY':'UNAVAILABLE'}`;$('#market-delivery-status').textContent=ok?'READY FOR REQUEST':'NOT AVAILABLE';$('#market-terms').dataset.reason=data.reason||'';}catch(e){$('#market-status-chip').innerHTML='<i></i> STATUS UNAVAILABLE';$('#request-market').disabled=true}}
-  $('#check-market').addEventListener('click',checkMarketStatus);
-  function decodeBase64Json(value){try{return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(value),c=>c.charCodeAt(0))))}catch{return null}}
-  function encodeBase64Json(value){const bytes=new TextEncoder().encode(JSON.stringify(value));let binary='';bytes.forEach(byte=>binary+=String.fromCharCode(byte));return btoa(binary)}
-  async function sendPaidRequest(paymentSignature){const query=$('#market-query').value.trim();const r=await fetch('/api/market',{method:'POST',headers:{'content-type':'application/json',...(paymentSignature?{'payment-signature':paymentSignature}:{})},body:JSON.stringify({network:activeNetwork,query,source:activeSource})});let data={};try{data=await r.json()}catch{}return{response:r,data}}
-  $('#request-market').addEventListener('click',async()=>{const query=$('#market-query').value.trim();if(!query){showToast('Write the investigation request first.');return}$('#market-delivery-status').textContent='REQUESTING';$('#market-output').innerHTML='<div class="empty-row">Requesting the paid service endpoint…</div>';try{const {response,data}=await sendPaidRequest();if(response.status===402){const challenge=decodeBase64Json(response.headers.get('payment-required')||response.headers.get('PAYMENT-REQUIRED')||'')||data;pendingPayment=challenge;const accepts=challenge.accepts||[];const match=accepts.find(a=>a.network===NETWORKS[activeNetwork].caip2&&a.scheme==='exact');if(!match)throw new Error('The payment challenge offers no exact payment for the selected Pharos network.');$('#market-delivery-status').textContent='PAYMENT REQUIRED';$('#market-output').innerHTML=`<div class="result-card"><div class="report-content"><h3>Payment challenge received</h3><p class="muted">The server returned a real HTTP 402 challenge. No payment has been signed or settled.</p><div class="fact-grid"><div class="fact-box"><small>NETWORK</small><b>${esc(match.network)}</b></div><div class="fact-box"><small>ASSET</small><b>${esc(match.asset)}</b></div><div class="fact-box"><small>AMOUNT · BASE UNITS</small><b>${esc(match.amount)}</b></div><div class="fact-box"><small>RECIPIENT</small><b>${esc(match.payTo)}</b></div><div class="fact-box"><small>TRANSFER METHOD</small><b>${esc(match.extra?.assetTransferMethod||'eip3009')}</b></div></div><div class="report-warning">Review the exact token and amount above. The wallet will request a typed-data signature that authorizes one token transfer.</div><button class="button primary full-button" id="authorize-x402">Review and sign payment →</button></div></div>`;$('#authorize-x402').addEventListener('click',authorizePaidRequest);return}if(!response.ok)throw new Error(data.error||`Service returned HTTP ${response.status}.`);$('#market-delivery-status').textContent='DELIVERED';$('#market-output').innerHTML=`<div class="result-card"><div class="report-header"><b>Paid report delivered</b><span class="classification verified">SETTLED</span></div><div class="report-content"><p>${esc(JSON.stringify(data.report||data))}</p><div class="report-warning">The paid middleware accepted the request and service handler returned a report.</div></div></div>`;}catch(e){$('#market-delivery-status').textContent='UNAVAILABLE';$('#market-output').innerHTML=`<div class="report-warning">${esc(e.message)}</div>`}});
-  async function authorizePaidRequest(){try{if(!pendingPayment)throw new Error('Payment challenge is no longer available. Request it again.');if(!wallet)throw new Error('Connect your wallet first.');const requirement=(pendingPayment.accepts||[]).find(a=>a.network===NETWORKS[activeNetwork].caip2&&a.scheme==='exact');if(!requirement)throw new Error('No exact payment requirement matches the selected network.');if(requirement.extra?.assetTransferMethod&&requirement.extra.assetTransferMethod!=='eip3009')throw new Error('This wallet flow supports only EIP-3009 exact token authorization.');if(!requirement.extra?.name||!requirement.extra?.version)throw new Error('The challenge omitted the token EIP-712 name/version needed for a verifiable signature.');await walletChain();const activeChain=await ethereum.request({method:'eth_chainId'});if(parseInt(activeChain,16)!==currentNetwork().chainId)throw new Error('Wallet network does not match the payment network.');const code=await rpc('eth_getCode',[requirement.asset,'latest']);if(code==='0x'||code==='0x0')throw new Error('Payment asset has no deployed bytecode on the selected network.');const now=Math.floor(Date.now()/1000);const authorization={from:wallet,to:requirement.payTo,value:String(requirement.amount),validAfter:String(Math.max(0,now-10)),validBefore:String(now+Math.min(Number(requirement.maxTimeoutSeconds||300),300)),nonce:'0x'+[...crypto.getRandomValues(new Uint8Array(32))].map(x=>x.toString(16).padStart(2,'0')).join('')};const typed={domain:{name:requirement.extra.name,version:requirement.extra.version,chainId:currentNetwork().chainId,verifyingContract:requirement.asset},types:{EIP712Domain:[{name:'name',type:'string'},{name:'version',type:'string'},{name:'chainId',type:'uint256'},{name:'verifyingContract',type:'address'}],TransferWithAuthorization:[{name:'from',type:'address'},{name:'to',type:'address'},{name:'value',type:'uint256'},{name:'validAfter',type:'uint256'},{name:'validBefore',type:'uint256'},{name:'nonce',type:'bytes32'}]},primaryType:'TransferWithAuthorization',message:authorization};const signature=await ethereum.request({method:'eth_signTypedData_v4',params:[wallet,JSON.stringify(typed)]});const payment={x402Version:2,resource:pendingPayment.resource||{url:location.origin+'/api/market',description:'OATH Premium Intelligence',mimeType:'application/json'},accepted:requirement,payload:{signature,authorization}};const header=encodeBase64Json(payment);$('#market-delivery-status').textContent='VERIFYING PAYMENT';$('#market-output').innerHTML='<div class="empty-row">Wallet signature received. Waiting for facilitator verification and settlement…</div>';const {response,data}=await sendPaidRequest(header);if(!response.ok)throw new Error(data.error||`Payment service returned HTTP ${response.status}.`);$('#market-delivery-status').textContent='DELIVERED';$('#market-output').innerHTML=`<div class="result-card"><div class="report-header"><b>Paid report delivered</b><span class="classification verified">SETTLED</span></div><div class="report-content"><p>${esc(JSON.stringify(data.report||data))}</p><div class="fact-box"><small>PAYMENT RESULT</small><b>${esc(response.headers.get('payment-response')||data.payment?.receipt||'Facilitator accepted the paid request')}</b></div><div class="report-warning">Service delivered after the x402 payment middleware proceeded to the report handler.</div></div></div>`;pendingPayment=null;addRecord({title:'x402 paid investigation',kind:'payment',network:activeNetwork,classification:'VERIFIED'})}catch(e){$('#market-delivery-status').textContent='PAYMENT NOT VERIFIED';$('#market-output').innerHTML=`<div class="report-warning">${esc(e.message)}. No paid report was marked as delivered.</div>`}}
+  async function checkMarketStatus() {
+    try {
+      const response = await fetch(`/api/market?network=${activeNetwork}`);
+      const data = await response.json();
+      $('#market-network').textContent = data.network || currentNetwork().name;
+      $('#market-facilitator').textContent = data.facilitator || 'Not configured';
+      $('#market-scheme').textContent = data.scheme === 'pharos-native-transfer' ? 'Native PHRS · x402 v2' : data.scheme === 'exact' ? 'Exact EVM · x402 v2' : 'Unavailable';
+      $('#market-asset').textContent = data.asset === 'native:PHRS' ? 'PHRS (native)' : data.asset || 'Not configured';
+      $('#market-recipient').textContent = data.recipient || 'Not configured';
+      const ready = data.status === 'ready';
+      $('#request-market').disabled = !ready;
+      $('#market-status-chip').className = `tiny-chip ${ready ? '' : 'warn'}`;
+      $('#market-status-chip').innerHTML = `<i></i> ${ready ? 'READY' : 'UNAVAILABLE'}`;
+      $('#market-delivery-status').textContent = ready ? 'READY FOR REQUEST' : 'NOT AVAILABLE';
+      $('#market-terms').dataset.reason = data.reason || '';
+    } catch {
+      $('#market-status-chip').innerHTML = '<i></i> STATUS UNAVAILABLE';
+      $('#request-market').disabled = true;
+    }
+  }
+  $('#check-market').addEventListener('click', checkMarketStatus);
+  function decodeBase64Json(value) {
+    try { return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(value), c => c.charCodeAt(0)))); } catch { return null; }
+  }
+  function encodeBase64Json(value) {
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    let binary = '';
+    bytes.forEach(byte => binary += String.fromCharCode(byte));
+    return btoa(binary);
+  }
+  async function sendPaidRequest(paymentSignature) {
+    const query = $('#market-query').value.trim();
+    const response = await fetch('/api/market', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(paymentSignature ? { 'payment-signature': paymentSignature } : {}) },
+      body: JSON.stringify({ network: activeNetwork, query, source: activeSource })
+    });
+    let data = {};
+    try { data = await response.json(); } catch { /* empty error response */ }
+    return { response, data };
+  }
+  function showPaidReport(response, data) {
+    $('#market-delivery-status').textContent = 'DELIVERED';
+    const payment = data.payment || {};
+    const receipt = payment.txHash && /^0x[a-fA-F0-9]{64}$/.test(payment.txHash)
+      ? `<div class="fact-box"><small>SETTLED TRANSACTION</small><b><a href="${currentNetwork().explorer}/tx/${payment.txHash}" target="_blank" rel="noopener noreferrer">${esc(short(payment.txHash, 12, 10))} · View on Pharos Explorer ↗</a></b></div>`
+      : `<div class="fact-box"><small>PAYMENT RESULT</small><b>${esc(response.headers.get('payment-response') || payment.receipt || 'Facilitator confirmed settlement')}</b></div>`;
+    $('#market-output').innerHTML = `<div class="result-card"><div class="report-header"><b>Paid report delivered</b><span class="classification verified">SETTLED</span></div><div class="report-content"><pre class="hash-row">${esc(JSON.stringify(data.report || data, null, 2))}</pre>${receipt}<div class="report-warning">The report was delivered after payment verification and settlement.</div></div></div>`;
+    pendingPayment = null;
+    addRecord({ title: 'x402 paid investigation', kind: 'payment', network: activeNetwork, classification: 'VERIFIED' });
+  }
+  $('#request-market').addEventListener('click', async () => {
+    const query = $('#market-query').value.trim();
+    if (!query) { showToast('Write the investigation request first.'); return; }
+    $('#market-delivery-status').textContent = 'REQUESTING';
+    $('#market-output').innerHTML = '<div class="empty-row">Requesting the paid service endpoint…</div>';
+    try {
+      const { response, data } = await sendPaidRequest();
+      if (response.status === 402) {
+        const challenge = decodeBase64Json(response.headers.get('payment-required') || response.headers.get('PAYMENT-REQUIRED') || '') || data;
+        pendingPayment = challenge;
+        const match = (challenge.accepts || []).find(item => item.network === `eip155:${NETWORKS[activeNetwork].chainId}`
+          && ['exact', 'pharos-native-transfer'].includes(item.scheme));
+        if (!match) throw new Error('The payment challenge does not offer a supported scheme for the selected Pharos network.');
+        const native = match.scheme === 'pharos-native-transfer';
+        const displayAmount = match.amountFormatted || match.amount;
+        const paymentInstructions = native
+          ? 'Your wallet will submit a native PHRS transfer on Atlantic Testnet. Review the exact amount and recipient in the wallet before approving.'
+          : 'Your wallet will request a typed-data signature authorizing one token transfer.';
+        $('#market-delivery-status').textContent = 'PAYMENT REQUIRED';
+        $('#market-output').innerHTML = `<div class="result-card"><div class="report-content"><h3>Payment challenge received</h3><p class="muted">No payment has been submitted yet. Review the payment details before approving in your wallet.</p><div class="fact-grid"><div class="fact-box"><small>NETWORK</small><b>${esc(match.network)}</b></div><div class="fact-box"><small>ASSET</small><b>${esc(native ? 'PHRS (native)' : match.asset)}</b></div><div class="fact-box"><small>AMOUNT</small><b>${esc(displayAmount)}</b></div><div class="fact-box"><small>RECIPIENT</small><b>${esc(match.payTo)}</b></div><div class="fact-box"><small>PAYMENT METHOD</small><b>${native ? 'Wallet transaction' : 'EIP-3009 authorization'}</b></div></div><div class="report-warning">${esc(paymentInstructions)} A blockchain transfer cannot be reversed once confirmed.</div><button class="button primary full-button" id="authorize-x402">${native ? 'Review and send PHRS payment →' : 'Review and sign payment →'}</button></div></div>`;
+        $('#authorize-x402').addEventListener('click', authorizePaidRequest);
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || `Service returned HTTP ${response.status}.`);
+      showPaidReport(response, data);
+    } catch (error) {
+      $('#market-delivery-status').textContent = 'UNAVAILABLE';
+      $('#market-output').innerHTML = `<div class="report-warning">${esc(error.message)}</div>`;
+    }
+  });
+  async function authorizePaidRequest() {
+    try {
+      if (!pendingPayment) throw new Error('Payment challenge is no longer available. Request it again.');
+      if (!wallet) throw new Error('Connect your wallet first.');
+      const requirement = (pendingPayment.accepts || []).find(item => item.network === `eip155:${NETWORKS[activeNetwork].chainId}`
+        && ['exact', 'pharos-native-transfer'].includes(item.scheme));
+      if (!requirement) throw new Error('No supported payment requirement matches the selected network.');
+      await walletChain();
+      const activeChain = await ethereum.request({ method: 'eth_chainId' });
+      if (parseInt(activeChain, 16) !== currentNetwork().chainId) throw new Error('Wallet network does not match the payment network.');
+
+      if (requirement.scheme === 'pharos-native-transfer') {
+        if (activeNetwork !== 'atlantic' || Number(requirement.extra?.chainId) !== 688689) throw new Error('Native PHRS payments are available only on Atlantic Testnet.');
+        if (!/^0x[a-fA-F0-9]{40}$/.test(requirement.payTo || '') || !/^\d+$/.test(requirement.amount || '') || BigInt(requirement.amount) <= 0n) throw new Error('The facilitator returned an invalid recipient or amount.');
+        $('#market-delivery-status').textContent = 'WALLET APPROVAL';
+        const txHash = await ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: wallet, to: requirement.payTo, value: `0x${BigInt(requirement.amount).toString(16)}` }]
+        });
+        $('#market-delivery-status').textContent = 'WAITING FOR ATLANTIC CONFIRMATION';
+        $('#market-output').innerHTML = `<div class="empty-row">Payment submitted: ${esc(short(txHash))}. Waiting for Atlantic Testnet confirmation…</div>`;
+        const receipt = await waitForReceipt(txHash, 48);
+        if (!receipt || receipt.status !== '0x1') throw new Error('Payment transaction was not confirmed successful. Check its status in your wallet or Pharos Explorer.');
+        const proof = encodeBase64Json({
+          x402Version: 2,
+          scheme: 'pharos-native-transfer',
+          network: 'eip155:688689',
+          payload: { txHash, payer: wallet }
+        });
+        $('#market-delivery-status').textContent = 'FACILITATOR VERIFYING';
+        $('#market-output').innerHTML = '<div class="empty-row">Atlantic confirmed the transfer. The facilitator is verifying settlement before OATH delivers the report…</div>';
+        const { response, data } = await sendPaidRequest(proof);
+        if (!response.ok) throw new Error(data.error || `Facilitator did not verify settlement (HTTP ${response.status}). Payment transaction: ${short(txHash)}.`);
+        showPaidReport(response, data);
+        return;
+      }
+
+      if (requirement.extra?.assetTransferMethod && requirement.extra.assetTransferMethod !== 'eip3009') throw new Error('This wallet flow supports only EIP-3009 exact token authorization.');
+      if (!requirement.extra?.name || !requirement.extra?.version) throw new Error('The challenge omitted the token EIP-712 name/version needed for a verifiable signature.');
+      const code = await rpc('eth_getCode', [requirement.asset, 'latest']);
+      if (code === '0x' || code === '0x0') throw new Error('Payment asset has no deployed bytecode on the selected network.');
+      const now = Math.floor(Date.now() / 1000);
+      const authorization = {
+        from: wallet, to: requirement.payTo, value: String(requirement.amount),
+        validAfter: String(Math.max(0, now - 10)),
+        validBefore: String(now + Math.min(Number(requirement.maxTimeoutSeconds || 300), 300)),
+        nonce: '0x' + [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, '0')).join('')
+      };
+      const typed = {
+        domain: { name: requirement.extra.name, version: requirement.extra.version, chainId: currentNetwork().chainId, verifyingContract: requirement.asset },
+        types: {
+          EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }],
+          TransferWithAuthorization: [{ name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'validAfter', type: 'uint256' }, { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' }]
+        },
+        primaryType: 'TransferWithAuthorization', message: authorization
+      };
+      const signature = await ethereum.request({ method: 'eth_signTypedData_v4', params: [wallet, JSON.stringify(typed)] });
+      const payment = {
+        x402Version: 2,
+        resource: pendingPayment.resource || { url: location.origin + '/api/market', description: 'OATH Premium Intelligence', mimeType: 'application/json' },
+        accepted: requirement,
+        payload: { signature, authorization }
+      };
+      const { response, data } = await sendPaidRequest(encodeBase64Json(payment));
+      if (!response.ok) throw new Error(data.error || `Payment service returned HTTP ${response.status}.`);
+      showPaidReport(response, data);
+    } catch (error) {
+      $('#market-delivery-status').textContent = 'PAYMENT NOT VERIFIED';
+      $('#market-output').innerHTML = `<div class="report-warning">${esc(error.message)} No paid report was marked as delivered.</div>`;
+    }
+  }
   async function registryConfig(){const [r,local]=await Promise.all([fetch('/api/config').then(x=>x.json()).catch(()=>({})),Promise.resolve(read('oath.registry.addresses',{}))]);return local[activeNetwork]||r.registryAddresses?.[activeNetwork]||''}
   async function updateRegistryStatus(){try{$('#registry-network').textContent=currentNetwork().name;$('#registry-wallet-state').textContent=wallet?short(wallet,8,6):'Not connected';const address=await registryConfig();$('#registry-address').value=address;$('#registry-current-address').textContent=address?short(address,9,7):'Not configured';if(address){const code=await rpc('eth_getCode',[address,'latest']);const exists=code!=='0x'&&code!=='0x0';$('#registry-status-chip').className=`tiny-chip ${exists?'':'warn'}`;$('#registry-status-chip').innerHTML=`<i></i> ${exists?'AVAILABLE':'NO CODE'}`;$('#registry-deployment-state').textContent=exists?'Deployed on selected network':'Address has no code';$('#register-report').disabled=!exists}else{$('#registry-status-chip').className='tiny-chip warn';$('#registry-status-chip').innerHTML='<i></i> NOT DEPLOYED';$('#registry-deployment-state').textContent='Deploy or configure a registry address';$('#register-report').disabled=true}}catch(e){$('#registry-deployment-state').textContent=e.message}}
   $('#hash-report').addEventListener('click',async()=>{const value=$('#registry-report').value;if(!value.trim()){showToast('Enter report content first.');return}const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));lastReportHash='0x'+[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');$('#registry-hash-output').textContent=`SHA-256 ${lastReportHash}`;$('#registry-verify-hash').value=lastReportHash;await updateRegistryStatus()});

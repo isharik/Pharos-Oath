@@ -14,7 +14,7 @@ OATH is a non-custodial trust workspace for Pharos. It combines live RPC evidenc
 - Developers can install Pharos's published agent skill using `npx skills add https://github.com/PharosNetwork/pharos-skill-engine`. OATH's own runtime workflows do not need a server private key or Foundry signer.
 - **OATH Gate and policy center:** native transfer preview, RPC gas estimate, local recipient allow/deny lists and limit, network check, then explicit EIP-1193 wallet approval. Wallet keys never reach OATH.
 - **Investigation room, contract inspection, transaction autopsy, wallet reads, and OATH Watch:** all use the selected chain. Watch polls every 20 seconds while the page stays open.
-- **x402 marketplace:** standards-based exact EVM service with a 402 challenge and middleware verification. Disabled unless the selected network has a configured recipient, asset, price, and facilitator that advertises support.
+- **x402 marketplace:** accepts either exact EVM token authorization or the Pharos Atlantic native-PHRS transfer profile. It returns a 402 challenge, verifies payment with the configured facilitator, and unlocks reports only after settlement confirmation.
 - **Trust registry:** locally SHA-256-hashes report text, deploys `OathRegistry.sol` through the connected wallet, anchors hashes, and verifies them by RPC. Only hashes are stored on-chain.
 - **Activity ledger:** investigation history and settings are kept in browser local storage.
 
@@ -50,18 +50,27 @@ Optional service endpoints:
 
 ## x402 configuration
 
-The x402 Marketplace charges a fixed amount for a read-only Pharos investigation report. The buyer reviews the challenge and signs the requested token authorization in their wallet; the server does not hold buyer keys. The resource server uses x402 v2 `exact` and verifies the facilitator advertises that exact version, scheme, and chain before showing the service as ready.
+The x402 Marketplace charges for a read-only Pharos investigation report. The buyer reviews the actual challenge and approves payment in their own wallet; the app never holds wallet keys. OATH checks the facilitator's advertised x402 version, scheme, and network before enabling paid requests.
 
 ### Enable paid reports
 
-1. Choose the network (Atlantic or Pacific) and obtain a **facilitator whose `/supported` response includes x402 version 2, `exact`, and that exact Pharos CAIP-2 network** (`eip155:688689` for Atlantic; `eip155:1672` for Pacific). The public x402.org facilitator currently does not advertise either Pharos network, so it will not activate this service for Pharos. Do not work around this chain check; use a compatible facilitator or wait until one is available.
-2. Choose a payment token on that same network that supports EIP-3009 `transferWithAuthorization` and exposes its EIP-712 name and version. Verify the token contract and its decimals using trusted chain evidence. The address alone is not enough to establish that it is supported.
-3. Choose the recipient wallet address and fixed price. `PRICE_BASE_UNITS` is an integer in the token's smallest units: for example, `100000` is 0.1 token only when that token has 6 decimals.
-4. In Vercel **Project → Settings → Environment Variables**, add `X402_ENABLED=true` plus the relevant network values below. Set either the general facilitator URL/token or the network-specific URL/token. Add any facilitator bearer token as a server-side variable only. Select the deployment environments and redeploy.
-5. Open `/api/market?network=atlantic` (or `pacific`). It must report `status: "ready"` and the exact scheme/network before you test a paid request. Otherwise keep the service disabled and resolve the reported configuration or facilitator issue.
-6. In OATH **Agent Marketplace**, enter a research request and click **Check service**. When it reports ready, request a report, inspect the real HTTP 402 payment challenge, and review the network, token, amount, and recipient before signing. After facilitator verification/settlement succeeds, the report is delivered.
+For the existing Render service `https://octobot-x402-facilitator.onrender.com`, which advertises `pharos-native-transfer` on Atlantic (`eip155:688689`):
 
-Set `X402_ENABLED=true` only after all of the following are in place for the selected network:
+1. In Vercel, open **Project → Settings → Environment Variables**.
+2. Add `X402_ENABLED` with value `true`.
+3. Add `X402_ATLANTIC_FACILITATOR_URL` with value `https://octobot-x402-facilitator.onrender.com`.
+4. Select the environments you use (Production, and Preview if needed), save, then redeploy the latest OATH deployment.
+5. Open `https://YOUR-OATH-DOMAIN/api/market?network=atlantic`. It should return `status: "ready"`, `scheme: "pharos-native-transfer"`, a PHRS amount, and the configured recipient. The price and recipient come from the facilitator's `/premium` challenge; no asset/price/recipient variables are needed for this native-transfer scheme.
+6. In OATH, switch to **Atlantic Testnet**, connect a funded test wallet, open **Agent Marketplace**, enter a research request, and click **Check service**.
+7. Click **Request paid report**. Review the amount and recipient, then approve the native PHRS transfer in your wallet. The wallet broadcasts the payment and pays Atlantic gas. OATH waits for the receipt, asks the facilitator to verify and settle it, then returns the report and explorer link.
+
+The native transfer is an on-chain payment and cannot be reversed after confirmation. Start with a test wallet and a small testnet amount. A failed or underpaid transaction does not unlock the report. The facilitator verifies the mined transfer and records settlement; it does not custody the wallet or broadcast the buyer's transaction.
+
+For another facilitator using ERC-20 `exact`, configure the network's recipient, token contract, and base-unit price as below. The token must support EIP-3009 `transferWithAuthorization` and the challenge must provide its EIP-712 name/version. Pacific Mainnet does not accept the Atlantic native-PHRS facilitator; it needs its own compatible facilitator and payment asset.
+
+To check status, open `/api/market?network=atlantic` (or `pacific`). OATH reports ready only if the environment is enabled and the facilitator confirms a supported scheme for that chain. In the Agent Marketplace, use **Check service**, inspect the 402 challenge, and approve the payment only if the wallet details match the displayed terms.
+
+For `exact` ERC-20 payments, configure all of the following for that network:
 
 - `X402_ATLANTIC_PAY_TO` / `X402_PACIFIC_PAY_TO`
 - `X402_ATLANTIC_ASSET` / `X402_PACIFIC_ASSET`
@@ -69,7 +78,7 @@ Set `X402_ENABLED=true` only after all of the following are in place for the sel
 - `X402_FACILITATOR_URL` or a per-network facilitator URL
 - Optional `X402_FACILITATOR_TOKEN` or network-specific facilitator token, if the provider requires bearer authentication
 
-The configured facilitator must advertise x402 v2 exact EVM support for the relevant CAIP-2 network, and the asset must implement EIP-3009 transfer authorization supported by the wallet flow. OATH checks facilitator support before showing the paid request as ready. Never use an unverified token address or claim a payment succeeded without the middleware settlement response.
+The configured facilitator must advertise x402 v2 exact EVM support for the relevant CAIP-2 network, and the asset must implement EIP-3009 transfer authorization. For the native Atlantic profile, OATH reads the price and pay-to address from the facilitator's 402 challenge and validates the chain, amount, recipient, transaction, payer, verification result, and settlement result. Never use an unverified token address or claim a payment succeeded without facilitator confirmation.
 
 ## Safety and current external dependencies
 
