@@ -254,6 +254,64 @@
       notification.onclick = () => { window.focus(); notification.close(); };
     } catch { /* browser notification support is optional */ }
   }
+  let discordConfigured = false;
+  async function checkDiscordConfig() {
+    try {
+      const response = await fetch('/api/alerts');
+      const data = await response.json();
+      const enabled = response.ok && data.configured === true;
+      discordConfigured = enabled;
+      $('#watch-discord-check').disabled = !enabled;
+      $('#test-discord-alert').disabled = !enabled;
+      $('#watch-discord-status').textContent = enabled ? 'Webhook configured in deployment' : 'Add DISCORD_ALERTS_WEBHOOK_URL in Vercel';
+      if (!enabled) $('#watch-discord-check').checked = false;
+    } catch {
+      discordConfigured = false;
+      $('#watch-discord-check').disabled = true;
+      $('#test-discord-alert').disabled = true;
+      $('#watch-discord-status').textContent = 'Discord status unavailable';
+    }
+  }
+  async function testDiscordAlert() {
+    const address = $('#watch-address').value.trim() || wallet;
+    if (!validAddress(address)) { showToast('Connect a wallet or enter a valid wallet address first.'); return; }
+    const button = $('#test-discord-alert');
+    button.disabled = true;
+    button.textContent = 'Sending…';
+    try {
+      const response = await fetch('/api/alerts', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ network: activeNetwork, wallet: address, events: [{ type: 'activity', message: 'Test alert from OATH Watch.' }] })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      showToast('Test alert delivered to Discord.');
+      addWatchEvent('Discord test alert delivered.', new Date(), 'quiet');
+    } catch (error) {
+      showToast(`Discord test failed: ${error.message}`);
+    } finally {
+      button.textContent = 'Send test alert';
+      button.disabled = !discordConfigured;
+    }
+  }
+  async function sendDiscordAlerts(messages, address) {
+    const events = messages.slice(0, 10).map(message => ({
+      type: message.startsWith('ERC-20 Approval') ? 'approval' : message.startsWith('Monitored contract') ? 'contract' : /balance changed|Transaction count changed/i.test(message) ? 'wallet' : 'activity',
+      message
+    }));
+    try {
+      const response = await fetch('/api/alerts', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ network: activeNetwork, wallet: address, events })
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        addWatchEvent('Discord delivery failed: ' + (result.error || ('HTTP ' + response.status)), new Date(), 'error');
+      }
+    } catch {
+      addWatchEvent('Discord delivery failed: OATH could not reach its alert endpoint.', new Date(), 'error');
+    }
+  }
   async function watchTick() {
     if (watchBusy) return;
     watchBusy = true;
@@ -297,7 +355,9 @@
         if (log.address?.toLowerCase() !== contract) continue;
         events.push(`Monitored contract event · ${short(contract)} · topic ${(log.topics || [])[0] || 'unknown'} · tx ${short(log.transactionHash)}`);
       }
-      events.slice(0, 30).forEach(text => { addWatchEvent(text, now); notifyWatch(text); });
+      const alertEvents = events.slice(0, 10);
+      alertEvents.forEach(text => { addWatchEvent(text, now); notifyWatch(text); });
+      if (alertEvents.length && $('#watch-discord-check').checked) void sendDiscordAlerts(alertEvents, address);
       if (!sameWatch) addWatchEvent(`Monitoring baseline set for ${currentNetwork().name} · ${short(address)} · from block ${head.toLocaleString()}`, now, 'quiet');
       else if (!events.length) addWatchEvent(`Sync completed · scanned through block ${checkpoint.toLocaleString()}`, now, 'quiet');
       save('oath.watch.last', { address, contract, network: activeNetwork, balance: bal, nonce, lastBlock: checkpoint });
@@ -323,7 +383,7 @@
     $('#watch-address').value = address;
     localStorage.setItem('oath.watch.config', JSON.stringify({
       address, contract, balance: $('#watch-balance-check').checked, nonce: $('#watch-nonce-check').checked,
-      approvals: $('#watch-approval-check').checked, alerts: $('#watch-alert-check').checked
+      approvals: $('#watch-approval-check').checked, alerts: $('#watch-alert-check').checked, discord: $('#watch-discord-check').checked
     }));
     if ($('#watch-alert-check').checked && 'Notification' in window && Notification.permission === 'default') {
       try { await Notification.requestPermission(); } catch { /* keep in-app monitoring available */ }
@@ -334,7 +394,9 @@
     watchTimer = setInterval(watchTick, 20000);
   });
   $('#stop-watch').addEventListener('click', stopWatch);
+  $('#test-discord-alert').addEventListener('click', testDiscordAlert);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && watchTimer) watchTick(); });
+  void checkDiscordConfig();
   const watchConfig = read('oath.watch.config', null);
   if (watchConfig) {
     $('#watch-address').value = watchConfig.address || '';
@@ -343,6 +405,7 @@
     $('#watch-nonce-check').checked = watchConfig.nonce !== false;
     $('#watch-approval-check').checked = watchConfig.approvals !== false;
     $('#watch-alert-check').checked = watchConfig.alerts !== false;
+    $('#watch-discord-check').checked = watchConfig.discord === true;
   }
   let pendingPayment = null, lastReportHash = '';
   async function checkMarketStatus() {

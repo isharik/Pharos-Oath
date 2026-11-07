@@ -9,6 +9,7 @@ import integrations from "./api/integrations.js";
 import agent from "./api/agent.js";
 import market from "./api/market.js";
 import registry from "./api/registry.js";
+import alerts from "./api/alerts.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const envFile = path.join(root, ".env.local");
@@ -31,7 +32,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "16kb" }));
 
-for (const [route, handler] of Object.entries({ chain, config, docs, integrations, agent, market, registry })) {
+for (const [route, handler] of Object.entries({ chain, config, docs, integrations, agent, market, registry, alerts })) {
   app.all(`/api/${route}`, async (req, res, next) => {
     try { await handler(req, res); } catch (error) { next(error); }
   });
