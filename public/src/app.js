@@ -13,7 +13,7 @@
   let investigationKind = 'address';
   let watchTimer = null, toastTimer = null, rpcId = 1;
   const history = read('oath.history', []);
-  const policy = read('oath.policy', {max:'1', blocked:[], trusted:[]});
+  const policy = read('oath.policy', {max:'1', maxApproval:'1', blocked:[], trusted:[]});
   function read(key, fallback){try{return JSON.parse(localStorage.getItem(key)) ?? fallback}catch{return fallback}}
   function save(key, value){localStorage.setItem(key,JSON.stringify(value))}
   function short(s, a=8, b=6){return s&&s.length>a+b+3?`${s.slice(0,a)}…${s.slice(-b)}`:s||'—'}
@@ -66,18 +66,284 @@
   async function runCore(){const q=$('#core-prompt').value.trim();if(!q){showToast('Describe an investigation objective first.');return}const timeline=$('#core-timeline');const steps=$$('.timeline-step',timeline);steps.forEach(x=>x.classList.remove('done','running'));steps[0].classList.add('done');$('#core-workflow-status').textContent='OBJECTIVE RECEIVED';$('#report-area').innerHTML='<div class="report-card"><div class="report-content">OATH CORE is selecting a Pharos Skill Engine workflow…</div></div>';try{steps[1].classList.add('running');const walletRequested=/\b(my wallet|my balance|my holdings|my portfolio|connected wallet)\b/i.test(q);const payload={message:q,network:activeNetwork,source:activeSource,...(walletRequested&&wallet?{wallet}:{})};const response=await fetch('/api/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||'Agent request failed.');steps[1].classList.remove('running');steps[1].classList.add('done');steps[2].classList.add('done');steps[3].classList.add('done');$('#core-workflow-status').textContent=result.configured?'LLM · REPORT READY':'READ-ONLY REPORT READY';const evidence=(result.toolCalls||[]).map(c=>`<div class="fact-box"><small>${esc(c.name)} · STRUCTURED RESULT</small><b>${esc(JSON.stringify(c.result))}</b></div>`).join('');const stages=(result.timeline||[]).map(s=>`<li>${esc(s)}</li>`).join('');$('#report-area').innerHTML=`<div class="report-card"><div class="report-header"><b>OATH CORE investigation · ${esc(currentNetwork().name)}</b><span class="classification">${result.configured?'LLM':'READ ONLY'}</span></div><div class="report-content"><p class="agent-answer">${esc(result.answer||'No summary was returned.')}</p><div class="fact-grid">${evidence}</div><ul class="evidence-list">${stages}</ul><div class="workflow-note"><span>ⓘ</span><p>${result.configured?'LLM-assisted':'Skill Engine'} report. Tool results are evidence; contract data and tool output are treated as untrusted content.</p></div></div></div>`;const target=q.match(/0x[a-fA-F0-9]{64}|0x[a-fA-F0-9]{40}/)?.[0];addRecord({title:'OATH CORE investigation',target,kind:'agent',classification:(result.toolCalls||[]).some(c=>c.result?.classification==='DANGER')?'DANGER':'UNKNOWN',network:activeNetwork,report:result});}catch(error){steps[1].classList.remove('running');$('#core-workflow-status').textContent='INVESTIGATION FAILED';$('#report-area').innerHTML=`<div class="report-warning">${esc(error.message)}</div>`}}
   $('#run-core').addEventListener('click',runCore);$('#core-prompt').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')runCore()});
   function policyLines(value){return value.split(/[\n,\s]+/).map(x=>x.trim().toLowerCase()).filter(Boolean)}
-  function loadPolicyForm(){$('#policy-max-value').value=policy.max||'1';$('#policy-blocked').value=(policy.blocked||[]).join('\n');$('#policy-trusted').value=(policy.trusted||[]).join('\n')}
-  $('#save-policy').addEventListener('click',()=>{const max=$('#policy-max-value').value.trim();if(max&&(Number(max)<0||!Number.isFinite(Number(max)))){showToast('Maximum transfer must be a non-negative number.');return}const blocked=policyLines($('#policy-blocked').value),trusted=policyLines($('#policy-trusted').value);if([...blocked,...trusted].some(a=>!validAddress(a))){showToast('Every policy address must be a valid EVM address.');return}policy.max=max;policy.blocked=blocked;policy.trusted=trusted;save('oath.policy',policy);$('#policy-saved').textContent='Saved on this device';setTimeout(()=>$('#policy-saved').textContent='',2500)});
-  function amountToWei(value){if(!/^\d+(\.\d{1,18})?$/.test(value))throw new Error('Enter a positive amount with no more than 18 decimal places.');const [whole,fraction='']=value.split('.');return BigInt(whole)*10n**18n+BigInt((fraction+'0'.repeat(18)).slice(0,18))}
-  function evaluateTransfer(to,amount){const errors=[];if(!validAddress(to))errors.push('Recipient is not a valid 20-byte EVM address.');let wei=null;try{wei=amountToWei(amount);if(wei<=0n)errors.push('Amount must be greater than zero.')}catch(e){errors.push(e.message)}if(to&&policy.blocked.includes(to.toLowerCase()))errors.push('Recipient is on your locally configured blocklist.');if(to&&(policy.trusted||[]).length&&!policy.trusted.includes(to.toLowerCase()))errors.push('Recipient is not on your locally configured trusted list.');if(wei!==null&&policy.max&&wei>amountToWei(String(policy.max)))errors.push(`Amount exceeds your local maximum of ${policy.max} ${currentNetwork().nativeSymbol}.`);if(!wallet)errors.push('Connect a wallet before proceeding.');return errors}
-  $('#preview-transfer').addEventListener('click',async()=>{const to=$('#gate-to').value.trim(),amount=$('#gate-amount').value.trim(),host=$('#gate-preview');const errors=evaluateTransfer(to,amount);if(errors.length){host.innerHTML=`<div class="report-warning"><b>POLICY BLOCKED</b><br>${errors.map(esc).join('<br>')}</div>`;return}if(!window.ethereum){showToast('A browser wallet is required to sign.');return}host.innerHTML='<div class="report-card"><div class="report-content"><h3>Checking transaction parameters…</h3></div></div>';try{const chain=await ethereum.request({method:'eth_chainId'});if(parseInt(chain,16)!==currentNetwork().chainId){await walletChain()}const tx={from:wallet,to,value:'0x'+amountToWei(amount).toString(16)};const gas=await rpc('eth_estimateGas',[tx]);$('#gate-gas').textContent=String(parseInt(gas,16))+' units';host.innerHTML=`<div class="report-card"><div class="report-header"><b>Review transaction intent</b><span class="classification caution">CAUTION</span></div><div class="report-content"><div class="fact-grid"><div class="fact-box"><small>RECIPIENT</small><b>${esc(to)}</b></div><div class="fact-box"><small>AMOUNT</small><b>${esc(amount)} ${currentNetwork().nativeSymbol}</b></div><div class="fact-box"><small>NETWORK</small><b>${currentNetwork().name} · ${currentNetwork().chainId}</b></div><div class="fact-box"><small>ESTIMATED GAS</small><b>${parseInt(gas,16).toLocaleString()} units</b></div></div><div class="report-warning">Native value transfer only. The RPC estimate does not establish destination identity or safety. Review the wallet prompt carefully.</div><button class="button primary full-button" id="sign-transfer">Continue to wallet approval →</button></div></div>`;$('#sign-transfer').addEventListener('click',async()=>{if(evaluateTransfer(to,amount).length){showToast('Policy changed; transaction blocked.');return}try{const latest=await ethereum.request({method:'eth_chainId'});if(parseInt(latest,16)!==currentNetwork().chainId)throw new Error('Wallet is on the wrong network.');const hash=await ethereum.request({method:'eth_sendTransaction',params:[tx]});host.insertAdjacentHTML('beforeend',`<div class="report-warning">Wallet submitted transaction: <a class="hash-row" href="${currentNetwork().explorer}/tx/${encodeURIComponent(hash)}" target="_blank" rel="noopener">${esc(hash)}</a></div>`);addRecord({title:'OATH Gate transfer submitted',target:hash,kind:'gate',classification:'UNKNOWN',network:activeNetwork});showToast('Transaction submitted by your wallet; checking receipt…');pollReceipt(hash,host)}catch(e){showToast(e.code===4001?'Wallet signature was rejected.':`Transaction failed: ${e.message}`)}})}catch(e){host.innerHTML=`<div class="report-warning">Could not prepare transaction: ${esc(e.message)}</div>`}});
+  function loadPolicyForm() {
+    $('#policy-max-value').value = policy.max || '1';
+    $('#policy-max-approval').value = policy.maxApproval || '1';
+    $('#policy-blocked').value = (policy.blocked || []).join(String.fromCharCode(10));
+    $('#policy-trusted').value = (policy.trusted || []).join(String.fromCharCode(10));
+  }
+  $('#save-policy').addEventListener('click', () => {
+    const max = $('#policy-max-value').value.trim();
+    const maxApproval = $('#policy-max-approval').value.trim();
+    try { if (!max) throw new Error('missing'); amountToWei(max); } catch { showToast('Set a valid maximum native transfer amount.'); return; }
+    if (!/^\d+(\.\d{1,36})?$/.test(maxApproval)) { showToast('Maximum token approval must be a non-negative decimal amount.'); return; }
+    const blocked = policyLines($('#policy-blocked').value), trusted = policyLines($('#policy-trusted').value);
+    if ([...blocked, ...trusted].some(address => !validAddress(address))) { showToast('Every policy address must be a valid EVM address.'); return; }
+    policy.max = max;
+    policy.maxApproval = maxApproval;
+    policy.blocked = blocked;
+    policy.trusted = trusted;
+    save('oath.policy', policy);
+    $('#policy-saved').textContent = 'Saved on this device';
+    setTimeout(() => $('#policy-saved').textContent = '', 2500);
+  });
+  function amountToWei(value) {
+    if (!/^\d+(\.\d{1,18})?$/.test(value)) throw new Error('Enter a positive amount with no more than 18 decimal places.');
+    const [whole, fraction = ''] = value.split('.');
+    return BigInt(whole) * 10n ** 18n + BigInt((fraction + '0'.repeat(18)).slice(0, 18));
+  }
+  function parseTokenUnits(value, decimals) {
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36 || !/^\d+(\.\d+)?$/.test(value)) throw new Error('Enter a valid token amount.');
+    const [whole, fraction = ''] = value.split('.');
+    if (fraction.length > decimals) throw new Error(`This token supports at most ${decimals} decimal places.`);
+    return BigInt(whole) * 10n ** BigInt(decimals) + BigInt((fraction + '0'.repeat(decimals)).slice(0, decimals) || '0');
+  }
+  function formatTokenUnits(value, decimals) {
+    const divisor = 10n ** BigInt(decimals);
+    const whole = value / divisor;
+    if (decimals === 0) return String(whole);
+    const fraction = String(value % divisor).padStart(decimals, '0').replace(/0+$/, '');
+    return fraction ? `${whole}.${fraction}` : String(whole);
+  }
+  function addressPolicyErrors(address, role) {
+    const errors = [];
+    if (!validAddress(address)) errors.push(`${role} is not a valid 20-byte EVM address.`);
+    if (address && (policy.blocked || []).includes(address.toLowerCase())) errors.push(`${role} is on your locally configured blocklist.`);
+    if (address && (policy.trusted || []).length && !policy.trusted.includes(address.toLowerCase())) errors.push(`${role} is not on your locally configured trusted list.`);
+    return errors;
+  }
+  function evaluateTransfer(to, amount) {
+    const errors = addressPolicyErrors(to, 'Recipient');
+    let wei = null;
+    try { wei = amountToWei(amount); if (wei <= 0n) errors.push('Amount must be greater than zero.'); }
+    catch (error) { errors.push(error.message); }
+    try { if (wei !== null && policy.max && wei > amountToWei(String(policy.max))) errors.push(`Amount exceeds your local maximum of ${policy.max} ${currentNetwork().nativeSymbol}.`); }
+    catch { errors.push('The saved native-transfer limit is invalid; update it in Policy Center.'); }
+    if (!wallet) errors.push('Connect a wallet before proceeding.');
+    return errors;
+  }
+  function evaluateApproval(spender, amount, decimals) {
+    const errors = addressPolicyErrors(spender, 'Approval spender');
+    if (!validAddress($('#gate-token').value.trim())) errors.push('Token contract is not a valid 20-byte EVM address.');
+    let raw = null;
+    try { raw = parseTokenUnits(amount, decimals); if (raw <= 0n) errors.push('Approval amount must be greater than zero.'); }
+    catch (error) { errors.push(error.message); }
+    try {
+      const limit = parseTokenUnits(String(policy.maxApproval || '1'), decimals);
+      if (raw !== null && raw > limit) errors.push(`Approval exceeds your local cap of ${policy.maxApproval || '1'} token units.`);
+    } catch (error) { errors.push(`Saved token-approval cap is invalid for this token: ${error.message}`); }
+    if (!wallet) errors.push('Connect a wallet before proceeding.');
+    return { errors, raw };
+  }
+  function updateGateAction() {
+    const approval = $('#gate-action').value === 'erc20-approval';
+    $('#gate-to-label').textContent = approval ? 'APPROVAL SPENDER' : 'RECIPIENT';
+    $('#gate-to').placeholder = approval ? 'Address allowed to spend tokens' : '0x…';
+    $('#gate-token-row').hidden = !approval;
+    $('#gate-amount-label').textContent = approval ? 'ALLOWANCE · TOKEN UNITS' : 'AMOUNT';
+    $('#gate-amount').placeholder = approval ? 'e.g. 1.5' : '0.00';
+    $('#gate-asset-display').innerHTML = approval ? '◈ <b>ERC-20</b> <small>Token</small>' : `◉ <b class="native-symbol">${currentNetwork().nativeSymbol}</b> <small>Native</small>`;
+    $('#gate-preview').innerHTML = '';
+    $('#gate-simulation-state').textContent = 'Run before signing';
+  }
+  $('#gate-action').addEventListener('change', updateGateAction);
+  async function buildGatePlan(mode, spenderOrRecipient, amount, token) {
+    const accounts = await ethereum.request({ method: 'eth_accounts' });
+    if (!Array.isArray(accounts) || !accounts.some(account => account.toLowerCase() === wallet.toLowerCase())) throw new Error('Connect the active OATH wallet in your browser wallet before preparing this action.');
+    const chain = await ethereum.request({ method: 'eth_chainId' });
+    if (parseInt(chain, 16) !== currentNetwork().chainId) {
+      await walletChain();
+      const switched = await ethereum.request({ method: 'eth_chainId' });
+      if (parseInt(switched, 16) !== currentNetwork().chainId) throw new Error('Wallet network was not switched to the selected Pharos chain.');
+    }
+    if (mode === 'native') {
+      const errors = evaluateTransfer(spenderOrRecipient, amount);
+      if (errors.length) throw new Error(errors.join(' '));
+      return { mode, tx: { from: wallet, to: spenderOrRecipient, value: `0x${amountToWei(amount).toString(16)}` }, details: { recipient: spenderOrRecipient, amount: `${amount} ${currentNetwork().nativeSymbol}` } };
+    }
+    if (!validAddress(token)) throw new Error('Token contract is not a valid 20-byte EVM address.');
+    const code = await rpc('eth_getCode', [token, 'latest']);
+    if (!code || code === '0x' || code === '0x0') throw new Error('Token address has no deployed contract bytecode on the selected network.');
+    const decimalData = await rpc('eth_call', [{ to: token, data: '0x313ce567' }, 'latest']);
+    const decimals = Number(BigInt(decimalData));
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new Error('Token decimals are invalid or exceed the supported safety limit (36).');
+    const { errors, raw } = evaluateApproval(spenderOrRecipient, amount, decimals);
+    if (errors.length) throw new Error(errors.join(' '));
+    const word = value => BigInt(value).toString(16).padStart(64, '0');
+    const allowanceData = `0xdd62ed3e${wallet.slice(2).toLowerCase().padStart(64, '0')}${spenderOrRecipient.slice(2).toLowerCase().padStart(64, '0')}`;
+    const currentAllowance = BigInt(await rpc('eth_call', [{ to: token, data: allowanceData }, 'latest']));
+    const approveData = `0x095ea7b3${spenderOrRecipient.slice(2).toLowerCase().padStart(64, '0')}${word(raw)}`;
+    return {
+      mode, token, decimals, raw, currentAllowance,
+      tx: { from: wallet, to: token, value: '0x0', data: approveData },
+      details: { spender: spenderOrRecipient, token, amount: `${formatTokenUnits(raw, decimals)} token units`, currentAllowance: `${formatTokenUnits(currentAllowance, decimals)} token units`, decimals }
+    };
+  }
+  $('#preview-transfer').addEventListener('click', async () => {
+    const mode = $('#gate-action').value, spenderOrRecipient = $('#gate-to').value.trim(), amount = $('#gate-amount').value.trim();
+    const token = mode === 'erc20-approval' ? $('#gate-token').value.trim() : '';
+    const previewNetwork = activeNetwork;
+    const host = $('#gate-preview');
+    if (!window.ethereum) { showToast('A browser wallet is required to sign.'); return; }
+    host.innerHTML = '<div class="report-card"><div class="report-content"><h3>Decoding and simulating transaction…</h3></div></div>';
+    $('#gate-simulation-state').textContent = 'Simulating with eth_call';
+    try {
+      const plan = await buildGatePlan(mode, spenderOrRecipient, amount, token);
+      const [simulation, gas] = await Promise.all([rpc('eth_call', [plan.tx, 'latest']), rpc('eth_estimateGas', [plan.tx])]);
+      if (typeof simulation !== 'string' || !simulation.startsWith('0x')) throw new Error('RPC returned an invalid simulation result.');
+      if (mode === 'erc20-approval' && simulation.length >= 66 && BigInt(simulation) === 0n) throw new Error('Token simulation returned false; approval is blocked.');
+      const gasCount = parseInt(gas, 16);
+      if (!Number.isSafeInteger(gasCount) || gasCount <= 0) throw new Error('RPC returned an invalid gas estimate.');
+      $('#gate-gas').textContent = `${gasCount.toLocaleString()} units`;
+      $('#gate-simulation-state').textContent = 'Passed · latest state';
+      const facts = mode === 'native'
+        ? [['RECIPIENT', plan.details.recipient], ['AMOUNT', plan.details.amount], ['CALL DATA', 'Native value transfer']]
+        : [['TOKEN CONTRACT', plan.details.token], ['SPENDER', plan.details.spender], ['APPROVAL', plan.details.amount], ['CURRENT ALLOWANCE', plan.details.currentAllowance], ['TOKEN DECIMALS', String(plan.details.decimals)], ['DECODED METHOD', 'approve(address,uint256)']];
+      const factMarkup = facts.map(([label, value]) => `<div class="fact-box"><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join('');
+      const simLength = simulation && simulation !== '0x' ? `${Math.max(0, (simulation.length - 2) / 2)} bytes of return data` : 'Call completed without revert';
+      const approvalNote = mode === 'erc20-approval'
+        ? 'OATH recognized approve(address,uint256), decoded the spender and allowance, read decimals and current allowance, and applied your local cap. Only this standard ERC-20 method is enabled; blanket operator approvals are not supported.'
+        : 'Native value transfer only. The simulation uses current chain state but does not establish the recipient identity or safety.';
+      host.innerHTML = `<div class="report-card"><div class="report-header"><b>Review decoded action</b><span class="classification caution">SIMULATION PASSED</span></div><div class="report-content"><div class="fact-grid">${factMarkup}<div class="fact-box"><small>NETWORK</small><b>${esc(currentNetwork().name)} · ${currentNetwork().chainId}</b></div><div class="fact-box"><small>SIMULATION</small><b>${esc(simLength)}</b></div><div class="fact-box"><small>ESTIMATED GAS</small><b>${gasCount.toLocaleString()} units</b></div></div><div class="report-warning">${esc(approvalNote)} Simulation is not a security guarantee; state may change before execution. Inspect the wallet prompt.</div><button class="button primary full-button" id="sign-transfer">Re-simulate and continue to wallet →</button></div></div>`;
+      $('#sign-transfer').addEventListener('click', async () => {
+        try {
+          if (activeNetwork !== previewNetwork || $('#gate-action').value !== mode || $('#gate-to').value.trim() !== spenderOrRecipient || $('#gate-amount').value.trim() !== amount || (mode === 'erc20-approval' && $('#gate-token').value.trim() !== token)) throw new Error('Action details changed; run the preview again.');
+          if (wallet.toLowerCase() !== plan.tx.from.toLowerCase()) throw new Error('Connected account changed; preview the action again.');
+          const fresh = await buildGatePlan(mode, spenderOrRecipient, amount, token);
+          if (JSON.stringify(fresh.tx) !== JSON.stringify(plan.tx)) throw new Error('Transaction details changed; preview the action again.');
+          $('#gate-simulation-state').textContent = 'Re-simulating before wallet approval';
+          const [freshSimulation, freshGas] = await Promise.all([rpc('eth_call', [fresh.tx, 'latest']), rpc('eth_estimateGas', [fresh.tx])]);
+          if (typeof freshSimulation !== 'string' || !freshSimulation.startsWith('0x')) throw new Error('Latest-state simulation returned an invalid result.');
+          if (mode === 'erc20-approval' && freshSimulation.length >= 66 && BigInt(freshSimulation) === 0n) throw new Error('Latest-state token simulation returned false; approval is blocked.');
+          const freshGasCount = parseInt(freshGas, 16);
+          if (!Number.isSafeInteger(freshGasCount) || freshGasCount <= 0) throw new Error('Latest-state gas estimation failed.');
+          $('#gate-gas').textContent = `${freshGasCount.toLocaleString()} units`;
+          const latest = await ethereum.request({ method: 'eth_chainId' });
+          if (parseInt(latest, 16) !== currentNetwork().chainId) throw new Error('Wallet is on the wrong network.');
+          const hash = await ethereum.request({ method: 'eth_sendTransaction', params: [fresh.tx] });
+          host.insertAdjacentHTML('beforeend', `<div class="report-warning">Wallet submitted transaction: <a class="hash-row" href="${currentNetwork().explorer}/tx/${encodeURIComponent(hash)}" target="_blank" rel="noopener noreferrer">${esc(hash)}</a></div>`);
+          addRecord({ title: mode === 'native' ? 'OATH Gate transfer submitted' : 'OATH Gate token approval submitted', target: hash, kind: 'gate', classification: 'UNKNOWN', network: activeNetwork });
+          showToast('Transaction submitted by your wallet; checking receipt…');
+          pollReceipt(hash, host);
+        } catch (error) {
+          $('#gate-simulation-state').textContent = 'Blocked · review required';
+          showToast(error.code === 4001 ? 'Wallet signature was rejected.' : `Transaction blocked: ${error.message}`);
+        }
+      });
+    } catch (error) {
+      $('#gate-simulation-state').textContent = 'Simulation blocked';
+      host.innerHTML = `<div class="report-warning"><b>POLICY OR SIMULATION BLOCKED</b><br>${esc(error.message)}</div>`;
+    }
+  });
   async function pollReceipt(hash,host){for(let i=0;i<12;i++){await new Promise(r=>setTimeout(r,2500));try{const receipt=await rpc('eth_getTransactionReceipt',[hash]);if(receipt){const state=receipt.status==='0x1'?'successful':'failed';const note=document.createElement('div');note.className=receipt.status==='0x1'?'evidence-list':'report-warning';note.textContent=`Receipt observed: transaction ${state} in block ${parseInt(receipt.blockNumber,16)}.`;host.append(note);return}}catch{}}const note=document.createElement('div');note.className='report-warning';note.textContent='Receipt not available yet. Check the explorer link or run a transaction autopsy later.';host.append(note)}
-  function updateWatchUI(on){$('#watch-label').textContent=on?'Active':'Paused';$('#watch-detail').textContent=on?'Polling while page remains open':'Wallet watch is off';$('#wallet-monitoring').textContent=on?'Active':'Paused';$('#watch-status-chip').innerHTML=`<i></i> ${on?'ACTIVE':'PAUSED'}`;$('#start-watch').disabled=on;$('#stop-watch').disabled=!on}
-  async function watchTick(){const address=$('#watch-address').value.trim();if(!validAddress(address)){showToast('Enter a valid wallet address to monitor.');stopWatch();return}try{const [bal,nonce]=await Promise.all([$('#watch-balance-check').checked?rpc('eth_getBalance',[address,'latest']):Promise.resolve(null),$('#watch-nonce-check').checked?rpc('eth_getTransactionCount',[address,'latest']):Promise.resolve(null)]);const current={balance:bal,nonce};const previous=read('oath.watch.last',null);const now=new Date();$('#watch-last-sync').textContent=`SYNCED ${now.toLocaleTimeString()}`;if(previous&&previous.network===activeNetwork&&previous.address.toLowerCase()===address.toLowerCase()){const events=[];if(bal!==null&&previous.balance!==bal)events.push(`Native balance changed: ${(Number(BigInt(previous.balance))/1e18).toFixed(6)} → ${(Number(BigInt(bal))/1e18).toFixed(6)} ${currentNetwork().nativeSymbol}`);if(nonce!==null&&previous.nonce!==nonce)events.push(`Transaction count changed: ${parseInt(previous.nonce,16)} → ${parseInt(nonce,16)}`);events.forEach(text=>addWatchEvent(text,now));if(!events.length)addWatchEvent('Sync completed · no monitored changes',now,'quiet')}else addWatchEvent(`Initial ${currentNetwork().name} baseline captured for ${short(address)}`,now,'quiet');save('oath.watch.last',{address,network:activeNetwork,...current});}catch(e){addWatchEvent(`RPC sync failed: ${e.message}`,new Date(),'error')}}
-  function addWatchEvent(text,date,kind='change'){const host=$('#watch-events');if(host.querySelector('.empty-row'))host.innerHTML='';const row=document.createElement('div');row.className='watch-event';row.innerHTML=`<i style="background:${kind==='error'?'#da7777':kind==='quiet'?'#6481ab':'#73d9a8'}"></i><span><b>${esc(text)}</b><small>${date.toLocaleString()}</small></span>`;host.prepend(row)}
-  function stopWatch(){clearInterval(watchTimer);watchTimer=null;updateWatchUI(false)}
-  $('#start-watch').addEventListener('click',()=>{const addr=$('#watch-address').value.trim()||wallet;if(!validAddress(addr)){showToast('Connect a wallet or enter a valid EVM address.');return}$('#watch-address').value=addr;localStorage.setItem('oath.watch.config',JSON.stringify({address:addr,balance:$('#watch-balance-check').checked,nonce:$('#watch-nonce-check').checked}));updateWatchUI(true);watchTick();watchTimer=setInterval(watchTick,20000)});$('#stop-watch').addEventListener('click',stopWatch);
-  const watchConfig=read('oath.watch.config',null);if(watchConfig){$('#watch-address').value=watchConfig.address;$('#watch-balance-check').checked=watchConfig.balance;$('#watch-nonce-check').checked=watchConfig.nonce}
+  const APPROVAL_EVENT_TOPIC = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
+  let watchBusy = false;
+  function updateWatchUI(on) {
+    $('#watch-label').textContent = on ? 'Active' : 'Paused';
+    $('#watch-detail').textContent = on ? 'Monitoring chain activity' : 'Wallet watch is off';
+    $('#wallet-monitoring').textContent = on ? 'Active' : 'Paused';
+    $('#watch-status-chip').innerHTML = `<i></i> ${on ? 'ACTIVE' : 'PAUSED'}`;
+    $('#start-watch').disabled = on;
+    $('#stop-watch').disabled = !on;
+  }
+  function topicAddress(address) { return `0x${address.slice(2).toLowerCase().padStart(64, '0')}`; }
+  function notifyWatch(text) {
+    if (!$('#watch-alert-check').checked || !('Notification' in window) || Notification.permission !== 'granted') return;
+    try {
+      const notification = new Notification('OATH Watch · Pharos', { body: text, tag: `oath-${activeNetwork}-${Date.now()}` });
+      notification.onclick = () => { window.focus(); notification.close(); };
+    } catch { /* browser notification support is optional */ }
+  }
+  async function watchTick() {
+    if (watchBusy) return;
+    watchBusy = true;
+    const address = $('#watch-address').value.trim();
+    const contract = $('#watch-contract-address').value.trim().toLowerCase();
+    if (!validAddress(address)) { addWatchEvent('Enter a valid wallet address to monitor.', new Date(), 'error'); stopWatch(); watchBusy = false; return; }
+    if (contract && !validAddress(contract)) { addWatchEvent('Optional contract address is invalid; correct it to resume event monitoring.', new Date(), 'error'); watchBusy = false; return; }
+    try {
+      const [bal, nonce, headHex] = await Promise.all([
+        $('#watch-balance-check').checked ? rpc('eth_getBalance', [address, 'latest']) : Promise.resolve(null),
+        $('#watch-nonce-check').checked ? rpc('eth_getTransactionCount', [address, 'latest']) : Promise.resolve(null),
+        rpc('eth_blockNumber')
+      ]);
+      const head = parseInt(headHex, 16);
+      if (!Number.isSafeInteger(head) || head < 0) throw new Error('RPC returned an invalid block height.');
+      const previous = read('oath.watch.last', null);
+      const sameWatch = previous && previous.network === activeNetwork && previous.address?.toLowerCase() === address.toLowerCase()
+        && String(previous.contract || '') === contract && Number.isSafeInteger(Number(previous.lastBlock));
+      const from = sameWatch ? Number(previous.lastBlock) + 1 : head;
+      const to = Math.min(head, from + 199);
+      let approvalLogs = [], contractLogs = [];
+      if (from <= to && $('#watch-approval-check').checked) {
+        approvalLogs = await rpc('eth_getLogs', [{ fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`, topics: [APPROVAL_EVENT_TOPIC, topicAddress(address)] }]);
+      }
+      if (from <= to && validAddress(contract)) {
+        contractLogs = await rpc('eth_getLogs', [{ address: contract, fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}` }]);
+      }
+      const checkpoint = from <= to ? to : Math.max(head, Number(previous?.lastBlock ?? head));
+      const now = new Date();
+      $('#watch-last-sync').textContent = `SYNCED ${now.toLocaleTimeString()} · block ${checkpoint.toLocaleString()}`;
+      const events = [];
+      if (sameWatch && bal !== null && previous.balance !== bal) events.push(`Native balance changed: ${(Number(BigInt(previous.balance)) / 1e18).toFixed(6)} → ${(Number(BigInt(bal)) / 1e18).toFixed(6)} ${currentNetwork().nativeSymbol}`);
+      if (sameWatch && nonce !== null && previous.nonce !== nonce) events.push(`Transaction count changed: ${parseInt(previous.nonce, 16)} → ${parseInt(nonce, 16)}`);
+      for (const log of approvalLogs) {
+        if (!log.topics || log.topics.length < 3 || log.topics[0]?.toLowerCase() !== APPROVAL_EVENT_TOPIC || log.topics[1]?.toLowerCase() !== topicAddress(address).toLowerCase() || !/^0x[0-9a-fA-F]{64}$/.test(log.data || '')) continue;
+        const spender = `0x${log.topics[2].slice(-40)}`;
+        const rawAllowance = BigInt(log.data).toString();
+        events.push(`ERC-20 Approval event · token ${short(log.address)} · spender ${short(spender)} · ${rawAllowance} raw units · tx ${short(log.transactionHash)}`);
+      }
+      for (const log of contractLogs) {
+        if (log.address?.toLowerCase() !== contract) continue;
+        events.push(`Monitored contract event · ${short(contract)} · topic ${(log.topics || [])[0] || 'unknown'} · tx ${short(log.transactionHash)}`);
+      }
+      events.slice(0, 30).forEach(text => { addWatchEvent(text, now); notifyWatch(text); });
+      if (!sameWatch) addWatchEvent(`Monitoring baseline set for ${currentNetwork().name} · ${short(address)} · from block ${head.toLocaleString()}`, now, 'quiet');
+      else if (!events.length) addWatchEvent(`Sync completed · scanned through block ${checkpoint.toLocaleString()}`, now, 'quiet');
+      save('oath.watch.last', { address, contract, network: activeNetwork, balance: bal, nonce, lastBlock: checkpoint });
+    } catch (error) {
+      addWatchEvent(`RPC log scan failed: ${error.message}`, new Date(), 'error');
+    } finally { watchBusy = false; }
+  }
+  function addWatchEvent(text, date, kind = 'change') {
+    const host = $('#watch-events');
+    if (host.querySelector('.empty-row')) host.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'watch-event';
+    row.innerHTML = `<i style="background:${kind === 'error' ? '#da7777' : kind === 'quiet' ? '#6481ab' : '#73d9a8'}"></i><span><b>${esc(text)}</b><small>${date.toLocaleString()}</small></span>`;
+    host.prepend(row);
+    while (host.children.length > 60) host.lastElementChild.remove();
+  }
+  function stopWatch() { clearInterval(watchTimer); watchTimer = null; updateWatchUI(false); }
+  $('#start-watch').addEventListener('click', async () => {
+    const address = $('#watch-address').value.trim() || wallet;
+    const contract = $('#watch-contract-address').value.trim();
+    if (!validAddress(address)) { showToast('Connect a wallet or enter a valid EVM address.'); return; }
+    if (contract && !validAddress(contract)) { showToast('Enter a valid contract address or leave it blank.'); return; }
+    $('#watch-address').value = address;
+    localStorage.setItem('oath.watch.config', JSON.stringify({
+      address, contract, balance: $('#watch-balance-check').checked, nonce: $('#watch-nonce-check').checked,
+      approvals: $('#watch-approval-check').checked, alerts: $('#watch-alert-check').checked
+    }));
+    if ($('#watch-alert-check').checked && 'Notification' in window && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch { /* keep in-app monitoring available */ }
+    }
+    if ($('#watch-alert-check').checked && (!('Notification' in window) || Notification.permission !== 'granted')) showToast('Monitoring will run; allow browser notifications for desktop alerts.');
+    updateWatchUI(true);
+    watchTick();
+    watchTimer = setInterval(watchTick, 20000);
+  });
+  $('#stop-watch').addEventListener('click', stopWatch);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && watchTimer) watchTick(); });
+  const watchConfig = read('oath.watch.config', null);
+  if (watchConfig) {
+    $('#watch-address').value = watchConfig.address || '';
+    $('#watch-contract-address').value = watchConfig.contract || '';
+    $('#watch-balance-check').checked = watchConfig.balance !== false;
+    $('#watch-nonce-check').checked = watchConfig.nonce !== false;
+    $('#watch-approval-check').checked = watchConfig.approvals !== false;
+    $('#watch-alert-check').checked = watchConfig.alerts !== false;
+  }
   let pendingPayment = null, lastReportHash = '';
   async function checkMarketStatus() {
     try {

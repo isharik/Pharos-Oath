@@ -11,6 +11,18 @@ const SAFE_METHODS = new Set([
 export async function rpcRequest(networkKey, method, params = [], source = "rpc") {
   const network = getNetwork(networkKey);
   if (!SAFE_METHODS.has(method)) throw new Error(`RPC method ${method} is not enabled by OATH.`);
+  if (method === "eth_getLogs") {
+    const filter = params[0];
+    if (!filter || typeof filter !== "object" || Array.isArray(filter)) throw new Error("eth_getLogs requires a filter object.");
+    const parseBlock = value => {
+      if (Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+      if (typeof value === "string" && /^0x[0-9a-f]+$/i.test(value)) return BigInt(value);
+      if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
+      return null;
+    };
+    const from = parseBlock(filter.fromBlock), to = parseBlock(filter.toBlock);
+    if (from === null || to === null || to < from || to - from > 999n) throw new Error("eth_getLogs requires an ordered numeric range spanning at most 1,000 blocks.");
+  }
   if (source === "mcp" || source === "auto") {
     let viaMcp;
     try { viaMcp = await pharosMcpCall(network, method, params); }
