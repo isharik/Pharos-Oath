@@ -6,6 +6,13 @@
   };
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
+  // OKX exposes its EVM provider as window.okxwallet. Some browser wallets
+  // also publish a provider list on window.ethereum, so prefer OKX explicitly.
+  function findWalletProvider(){
+    const candidates=[window.okxwallet,...(Array.isArray(window.ethereum?.providers)?window.ethereum.providers:[]),window.ethereum].filter((provider,index,list)=>provider&&typeof provider.request==='function'&&list.indexOf(provider)===index);
+    return candidates.find(provider=>provider===window.okxwallet||provider.isOkxWallet||provider.isOKXWallet||provider.isOkx||provider.isOKExWallet)||candidates[0]||null;
+  }
+  let ethereum=findWalletProvider(), walletRequestPending=false, walletEventsProvider=null;
   let activeNetwork = localStorage.getItem('oath.network') || 'atlantic';
   let activeSource = localStorage.getItem('oath.source') || 'auto';
   const currentNetwork = () => NETWORKS[activeNetwork] || NETWORKS.atlantic;
@@ -38,14 +45,33 @@
   $('#network-select').value=activeNetwork;
   $('#source-select').value=activeSource;
   $('#source-select').addEventListener('change',e=>{activeSource=e.target.value;localStorage.setItem('oath.source',activeSource);$('#home-source-status').textContent=`Read source · ${activeSource==='auto'?'Automatic':activeSource.toUpperCase()}`;networkCheck();refreshWallet();if(activeSource==='mcp'&&activeNetwork==='atlantic')showToast('The hosted MCP serves Pacific. Atlantic requires a chain 688689 MCP endpoint.')});
-  $('#network-select').addEventListener('change',async e=>{activeNetwork=e.target.value;localStorage.setItem('oath.network',activeNetwork);const net=currentNetwork();$('#network-name').textContent=activeNetwork==='atlantic'?'Atlantic testnet':'Pacific mainnet';if(wallet&&window.ethereum){try{await walletChain()}catch(error){showToast(error.code===4001?'Network change was rejected.':'Wallet network could not be changed: '+error.message)}}updateNetworkUI();networkCheck();refreshWallet();if(watchTimer){stopWatch();showToast('OATH Watch paused because the network changed. Review and restart it.')}});
+  $('#network-select').addEventListener('change',async e=>{activeNetwork=e.target.value;localStorage.setItem('oath.network',activeNetwork);const net=currentNetwork();$('#network-name').textContent=activeNetwork==='atlantic'?'Atlantic testnet':'Pacific mainnet';if(wallet&&getWalletProvider()){try{await walletChain()}catch(error){showToast(error.code===4001?'Network change was rejected.':'Wallet network could not be changed: '+error.message)}}updateNetworkUI();networkCheck();refreshWallet();if(watchTimer){stopWatch();showToast('OATH Watch paused because the network changed. Review and restart it.')}});
   function updateNetworkUI(){$('#network-select').value=activeNetwork;const n=currentNetwork();$('#network-summary').textContent=`${activeNetwork==='atlantic'?'Atlantic':'Pacific'} · chain ${n.chainId}`;$$('.native-symbol').forEach(x=>x.textContent=n.nativeSymbol);const asset=$('.asset-select b'),limit=$('#policy-native-symbol'),footer=$('.footer-network');if(asset)asset.textContent=n.nativeSymbol;if(limit)limit.textContent=n.nativeSymbol;if(footer)footer.textContent=activeNetwork==='atlantic'?'PHAROS ATLANTIC TESTNET':'PHAROS PACIFIC MAINNET';if($('#gate-network-name'))$('#gate-network-name').textContent=n.name;if($('#gate-chain-id'))$('#gate-chain-id').textContent=String(n.chainId);if($('#wallet-network-name'))$('#wallet-network-name').textContent=n.name.replace('Pharos ','');}
-  async function connectWallet(){if(!window.ethereum){showToast('No browser wallet found. Install MetaMask or another EIP-1193 wallet.');return}try{const accounts=await ethereum.request({method:'eth_requestAccounts'});if(!accounts.length)return;wallet=accounts[0];localStorage.setItem('oath.wallet',wallet);await walletChain();renderWallet();showToast('Wallet connected. OATH never receives your keys.')}catch(e){showToast(e.code===4001?'Wallet connection was rejected.':e.message||'Wallet connection failed.')}}
-  async function walletChain(){if(!window.ethereum)return;const n=currentNetwork();try{const id=await ethereum.request({method:'eth_chainId'});if(parseInt(id,16)!==n.chainId){try{await ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:n.chainIdHex}]})}catch(e){if(e.code===4902)await ethereum.request({method:'wallet_addEthereumChain',params:[{chainId:n.chainIdHex,chainName:n.name,nativeCurrency:{name:n.nativeSymbol,symbol:n.nativeSymbol,decimals:18},rpcUrls:[n.rpcUrl],blockExplorerUrls:[n.explorer]}]});else throw e}}}catch(e){if(e.code!==4001)throw e}}
+  function getWalletProvider(){const provider=findWalletProvider();if(provider)ethereum=provider;if(ethereum&&walletEventsProvider!==ethereum){walletEventsProvider=ethereum;ethereum.on?.('accountsChanged',a=>{wallet=a[0]||'';if(wallet)localStorage.setItem('oath.wallet',wallet);else localStorage.removeItem('oath.wallet');if(!wallet)stopWatch();renderWallet()});ethereum.on?.('chainChanged',()=>{networkCheck();refreshWallet()})}return ethereum}
+  async function connectWallet(){
+    if(walletRequestPending)return;
+    const provider=getWalletProvider();
+    if(!provider){showToast('No compatible browser wallet found. Unlock OKX Wallet and reload this page.');return}
+    walletRequestPending=true;
+    const buttons=$$('#connect-wallet, .landing-connect, [data-action="connect"]');
+    buttons.forEach(button=>{button.disabled=true;button.setAttribute('aria-busy','true');button.dataset.connectLabel??=button.textContent;button.textContent='Check wallet…'});
+    try{
+      // Keep this request directly in the click handler so OKX can open its
+      // permission prompt when the site has not been connected yet.
+      const accounts=await provider.request({method:'eth_requestAccounts'});
+      if(!Array.isArray(accounts)||!accounts.length)throw new Error('OKX returned no permitted account. Unlock the wallet and grant this site account access.');
+      wallet=accounts[0];localStorage.setItem('oath.wallet',wallet);renderWallet();
+      const chainId=await provider.request({method:'eth_chainId'});
+      if(parseInt(chainId,16)!==currentNetwork().chainId)showToast(`Wallet connected. Switch to ${currentNetwork().name} using the network selector before signing.`);
+      else showToast('Wallet connected. OATH never receives your keys.');
+    }catch(e){showToast(e.code===4001?'Wallet connection was rejected in OKX.':e.message||'Wallet connection failed.')}
+    finally{walletRequestPending=false;buttons.forEach(button=>{button.disabled=false;button.removeAttribute('aria-busy');delete button.dataset.connectLabel});renderWallet()}
+  }
+  async function walletChain(){const provider=getWalletProvider();if(!provider)throw new Error('Connect a browser wallet first.');const n=currentNetwork();const id=await provider.request({method:'eth_chainId'});if(parseInt(id,16)!==n.chainId){try{await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:n.chainIdHex}]})}catch(e){if(e.code===4902)await provider.request({method:'wallet_addEthereumChain',params:[{chainId:n.chainIdHex,chainName:n.name,nativeCurrency:{name:n.nativeSymbol,symbol:n.nativeSymbol,decimals:18},rpcUrls:[n.rpcUrl],blockExplorerUrls:[n.explorer]}]});else throw e}}}
   function renderWallet(){const connected=!!wallet;$('#connect-wallet').innerHTML=connected?`<span>◉</span> ${esc(short(wallet,6,4))}`:'<span>◉</span> Connect wallet';$('#wallet-address').textContent=connected?short(wallet,7,6):'Not connected';$('#wallet-full').textContent=connected?wallet:'Connect a browser wallet to get started';$('#wallet-menu').textContent=connected?wallet.slice(2,4).toUpperCase():'—';$('#disconnect-wallet').hidden=!connected;$('#disconnect-wallet-topbar').hidden=!connected;$$('.landing-connect').forEach(button=>button.textContent=connected?`Connected · ${short(wallet,5,3)}`:'Connect wallet');if(connected){$('#watch-address').value=$('#watch-address').value||wallet;refreshWallet()}else{$('#wallet-balance').textContent='Connect a wallet to read balance';$('#wallet-full-balance').textContent='Account details are read live from the chain.';$('#wallet-read-balance').textContent='—';$('#wallet-nonce').textContent='—'}}
   function disconnectWallet(notify=true){wallet='';localStorage.removeItem('oath.wallet');stopWatch();renderWallet();if(notify)showToast('Disconnected from OATH on this device. Wallet site access is managed in your wallet app.')}
   $('#connect-wallet').addEventListener('click',connectWallet);$('#wallet-menu').addEventListener('click',()=>wallet?nav('wallet'):connectWallet());$('#disconnect-wallet').addEventListener('click',()=>disconnectWallet());$('#disconnect-wallet-topbar').addEventListener('click',()=>disconnectWallet());
-  if(window.ethereum){ethereum.on?.('accountsChanged',a=>{wallet=a[0]||'';if(wallet)localStorage.setItem('oath.wallet',wallet);else localStorage.removeItem('oath.wallet');if(!wallet)stopWatch();renderWallet()});ethereum.on?.('chainChanged',()=>{networkCheck();refreshWallet()})}
+  getWalletProvider();
   async function refreshWallet(){if(!wallet)return;try{const [bal,nonce]=await Promise.all([rpc('eth_getBalance',[wallet,'latest']),rpc('eth_getTransactionCount',[wallet,'latest'])]);const amount=Number(BigInt(bal))/1e18;const pretty=amount.toLocaleString(undefined,{maximumFractionDigits:6})+' '+currentNetwork().nativeSymbol;$('#wallet-balance').textContent=pretty;$('#wallet-full-balance').textContent=`${pretty} · ${new Date().toLocaleTimeString()}`;$('#wallet-read-balance').textContent=pretty;$('#wallet-nonce').textContent=String(parseInt(nonce,16))}catch(e){showToast(`Wallet read failed: ${e.message}`)}}
   $('#refresh-wallet').addEventListener('click',refreshWallet);
   function addRecord(record){history.unshift({...record,id:Date.now(),time:new Date().toISOString()});if(history.length>100)history.length=100;save('oath.history',history);updateCounts();renderRecent()}
@@ -184,7 +210,7 @@
     const token = mode === 'erc20-approval' ? $('#gate-token').value.trim() : '';
     const previewNetwork = activeNetwork;
     const host = $('#gate-preview');
-    if (!window.ethereum) { showToast('A browser wallet is required to sign.'); return; }
+    if (!getWalletProvider()) { showToast('A browser wallet is required to sign.'); return; }
     host.innerHTML = '<div class="report-card"><div class="report-content"><h3>Decoding and simulating transaction…</h3></div></div>';
     $('#gate-simulation-state').textContent = 'Simulating with eth_call';
     try {
