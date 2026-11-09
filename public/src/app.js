@@ -447,9 +447,17 @@
   }
   let pendingPayment = null, lastReportHash = '';
   async function checkMarketStatus() {
+    const button=$('#check-market');
+    let detail=$('#market-status-detail');
+    if(!detail){detail=document.createElement('div');detail.id='market-status-detail';detail.className='market-status-detail';detail.setAttribute('role','status');detail.setAttribute('aria-live','polite');$('#market-status-chip').closest('.panel-top').after(detail)}
+    button.disabled=true;button.textContent='Checking…';
+    $('#market-status-chip').className='tiny-chip warn';
+    $('#market-status-chip').innerHTML='<i></i> CHECKING';
+    detail.textContent=`Checking the ${currentNetwork().name} facilitator…`;
     try {
       const response = await fetch(`/api/market?network=${activeNetwork}`);
-      const data = await response.json();
+      const data = await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.reason||data.error||`Status endpoint returned HTTP ${response.status}.`);
       $('#market-network').textContent = data.network || currentNetwork().name;
       $('#market-facilitator').textContent = data.facilitator || 'Not configured';
       $('#market-scheme').textContent = data.scheme === 'pharos-native-transfer' ? 'Native PHRS · x402 v2' : data.scheme === 'exact' ? 'Exact EVM · x402 v2' : 'Unavailable';
@@ -461,10 +469,14 @@
       $('#market-status-chip').innerHTML = `<i></i> ${ready ? 'READY' : 'UNAVAILABLE'}`;
       $('#market-delivery-status').textContent = ready ? 'READY FOR REQUEST' : 'NOT AVAILABLE';
       $('#market-terms').dataset.reason = data.reason || '';
-    } catch {
+      detail.textContent=ready?`Ready on ${data.network||currentNetwork().name}. Clicking “Request paid report” should show the payment details first; no payment is submitted until you approve in your wallet.`:data.reason||'The facilitator is not ready for this network. Review the deployment configuration and try again.';
+    } catch (error) {
       $('#market-status-chip').innerHTML = '<i></i> STATUS UNAVAILABLE';
+      $('#market-status-chip').className='tiny-chip warn';
       $('#request-market').disabled = true;
-    }
+      $('#market-delivery-status').textContent='STATUS CHECK FAILED';
+      detail.textContent=`Could not check the facilitator: ${error.message}`;
+    } finally { button.disabled=false;button.textContent='Check service'; }
   }
   $('#check-market').addEventListener('click', checkMarketStatus);
   function decodeBase64Json(value) {
@@ -521,7 +533,7 @@
         $('#authorize-x402').addEventListener('click', authorizePaidRequest);
         return;
       }
-      if (!response.ok) throw new Error(data.error || `Service returned HTTP ${response.status}.`);
+      if (!response.ok) throw new Error(data.error || data.reason || `Service returned HTTP ${response.status}.${response.status===500?' Check the Vercel Function Logs for /api/market if this continues.':''}`);
       showPaidReport(response, data);
     } catch (error) {
       $('#market-delivery-status').textContent = 'UNAVAILABLE';

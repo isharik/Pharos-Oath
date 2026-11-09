@@ -79,9 +79,17 @@ function encodeHeader(value) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
 }
 
+function requestHeader(req, name) {
+  const key = name.toLowerCase();
+  const value = req.headers?.[key] ?? req.headers?.[name] ?? req.get?.(name);
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function sendChallenge(res, challenge, error) {
   const body = { ...challenge, ...(error ? { error } : {}) };
-  return res.status(402).set("PAYMENT-REQUIRED", encodeHeader(body)).json(body);
+  // setHeader is available on Vercel's Node response and on Express responses.
+  res.setHeader("PAYMENT-REQUIRED", encodeHeader(body));
+  return res.status(402).json(body);
 }
 
 async function createReport(query, source, network) {
@@ -110,7 +118,7 @@ async function createReport(query, source, network) {
 
 async function handleNativePayment(req, res, config, network, status) {
   const challenge = status.challenge;
-  const payment = decodePaymentHeader(req.get("payment-signature"));
+  const payment = decodePaymentHeader(requestHeader(req, "payment-signature"));
   if (!payment) return sendChallenge(res, challenge);
   const payer = payment.payload?.payer;
   const txHash = payment.payload?.txHash;
